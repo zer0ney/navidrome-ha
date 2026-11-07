@@ -60,7 +60,7 @@ class Session:
             artist=text(data.get("artist")),
             album=text(data.get("album")),
             album_artist=text(data.get("albumArtist")),
-            cover_id=text(data.get("coverArt")),
+            cover_id=text(data.get("coverArt")) or f"mf-{track_id}",
             duration=number(data.get("duration")),
             position=None if position_ms is None else position_ms / 1000,
             rate=number(data.get("playbackRate")),

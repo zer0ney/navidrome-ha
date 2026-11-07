@@ -5,7 +5,9 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from homeassistant.components.media_player import MediaPlayerState
+from aiohttp.test_utils import make_mocked_request
+from homeassistant.components.http import KEY_AUTHENTICATED
+from homeassistant.components.media_player import MediaPlayerImageView, MediaPlayerState
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
 from custom_components.navidrome import async_setup_entry, async_unload_entry
@@ -35,7 +37,7 @@ def publish(coordinator, entries):
     )
 
 
-async def test_metadata_artwork_no_secrets(coordinator, hass):
+async def test_metadata_artwork_no_secrets(coordinator, hass, server):
     publish(coordinator, [entry()])
     player = NavidromePlayer(coordinator, "stable", "user-a")
     player.hass = hass
@@ -53,6 +55,27 @@ async def test_metadata_artwork_no_secrets(coordinator, hass):
     assert "music" not in player.entity_picture
     assert "secret" not in str(player.extra_state_attributes)
     assert await player.async_get_media_image() == (b"image-bytes", "image/png")
+    assert server["requests"][-1][1]["id"] == "cover-1"
+
+
+@pytest.mark.parametrize("cover_art", [None, ""])
+async def test_artwork_without_cover_id(coordinator, hass, server, cover_art):
+    report = entry(coverArt=cover_art)
+    if cover_art is None:
+        report.pop("coverArt")
+    publish(coordinator, [report])
+    player = NavidromePlayer(coordinator, "stable", "user-a")
+    player.hass = hass
+    player.entity_id = "media_player.navidrome_alice"
+    assert player.entity_picture is not None
+    request = make_mocked_request("GET", player.entity_picture)
+    request[KEY_AUTHENTICATED] = False
+    view = MediaPlayerImageView(Mock(get_entity=Mock(return_value=player)))
+    response = await view.get(request, player.entity_id)
+    assert response.status == 200
+    assert response.body == b"image-bytes"
+    assert response.content_type == "image/png"
+    assert server["requests"][-1][1]["id"] == "mf-track-1"
 
 
 @pytest.mark.parametrize(
