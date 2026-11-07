@@ -100,6 +100,41 @@ async def test_artwork_cache(client, server):
     assert server["requests"][0][0] == "/music/rest/getCoverArt"
 
 
+async def test_large_webp_artwork(client, server):
+    body = b"webp-bytes" * (3 * 1024 * 1024 // 10)
+    server["artwork_response"] = {"body": body, "content_type": "image/webp"}
+    assert await client.image("animated-cover") == (body, "image/webp")
+    assert await client.image("animated-cover") == (body, "image/webp")
+    assert len(server["requests"]) == 1
+
+
+async def test_artwork_cache_byte_budget(client, server, monkeypatch):
+    monkeypatch.setattr(
+        "custom_components.navidrome.api.MAX_IMAGE_CACHE_BYTES", 2 * len(b"image-bytes")
+    )
+    for cover_id in ["cover-1", "cover-2", "cover-1", "cover-3", "cover-1", "cover-2"]:
+        assert await client.image(cover_id) == (b"image-bytes", "image/png")
+    assert [query["id"] for _, query, _ in server["requests"]] == [
+        "cover-1",
+        "cover-2",
+        "cover-3",
+        "cover-2",
+    ]
+
+
+@pytest.mark.parametrize("size", [64, 65])
+async def test_artwork_download_limit(client, server, monkeypatch, size):
+    monkeypatch.setattr("custom_components.navidrome.api.MAX_IMAGE_BYTES", 64)
+    body = b"x" * size
+    server["artwork_response"] = {"body": body, "content_type": "image/webp"}
+    if size == 64:
+        assert await client.image("cover") == (body, "image/webp")
+    else:
+        with pytest.raises(ProtocolError, match="size limit"):
+            await client.image("cover")
+        assert not client._images
+
+
 @pytest.mark.parametrize(
     ("status", "content_type", "code", "error", "message"),
     [

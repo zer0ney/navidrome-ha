@@ -19,6 +19,7 @@ from .const import (
     AUTH_HEADER,
     MAX_EVENT_CHARS,
     MAX_IMAGE_BYTES,
+    MAX_IMAGE_CACHE_BYTES,
     MAX_JSON_BYTES,
     MIN_SERVER_VERSION,
     REQUEST_TIMEOUT,
@@ -366,6 +367,8 @@ class NavidromeClient:
             body = await bounded_body(response, MAX_IMAGE_BYTES)
         self._images[key] = (time.monotonic(), body, content_type)
         self._images.move_to_end(key)
-        while len(self._images) > 32:
-            self._images.popitem(last=False)
+        cached_bytes = sum(len(image[1]) for image in self._images.values())
+        while len(self._images) > 32 or cached_bytes > MAX_IMAGE_CACHE_BYTES:
+            _, evicted = self._images.popitem(last=False)
+            cached_bytes -= len(evicted[1])
         return body, content_type
