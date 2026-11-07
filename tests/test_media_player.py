@@ -1,0 +1,209 @@
+"""Read-only entity metadata, image proxying, user identity and lifecycle."""
+
+import asyncio
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+from homeassistant.components.media_player import MediaPlayerState
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+
+from custom_components.navidrome import async_setup_entry, async_unload_entry
+from custom_components.navidrome.api import CannotConnect, InvalidAuth
+from custom_components.navidrome.coordinator import NavidromeCoordinator
+from custom_components.navidrome.media_player import NavidromePlayer
+from custom_components.navidrome.media_player import async_setup_entry as setup_players
+from custom_components.navidrome.models import Session, User
+
+from .conftest import entry
+
+NOW = datetime(2026, 11, 7, tzinfo=UTC)
+
+
+@pytest.fixture
+def coordinator(hass, client):
+    instance = NavidromeCoordinator(hass, Mock(), client, clock=lambda: NOW)
+    instance.users = {"user-a": User("user-a", "Alice")}
+    return instance
+
+
+def publish(coordinator, entries):
+    coordinator.async_set_updated_data(
+        coordinator._reducer.reduce(
+            coordinator.users, [Session.from_json(item) for item in entries], NOW
+        )
+    )
+
+
+async def test_metadata_artwork_no_secrets(coordinator, hass):
+    publish(coordinator, [entry()])
+    player = NavidromePlayer(coordinator, "stable", "user-a")
+    player.hass = hass
+    player.entity_id = "media_player.navidrome_alice"
+    assert player.unique_id == "stable:user-a"
+    assert player.state == MediaPlayerState.PLAYING
+    assert player.media_title == "First"
+    assert player.media_album_artist == "Album Artist"
+    assert player.media_duration == 240
+    assert player.media_position == 10
+    assert player.media_position_updated_at == NOW
+    assert player.supported_features == 0
+    assert not player.should_poll
+    assert player.entity_picture.startswith("/api/media_player_proxy/")
+    assert "music" not in player.entity_picture
+    assert "secret" not in str(player.extra_state_attributes)
+    assert await player.async_get_media_image() == (b"image-bytes", "image/png")
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ("starting", MediaPlayerState.BUFFERING),
+        ("paused", MediaPlayerState.PAUSED),
+        (None, None),
+        ("unrecognized", None),
+    ],
+)
+async def test_reported_states(coordinator, state, expected):
+    publish(coordinator, [entry(state=state)])
+    assert NavidromePlayer(coordinator, "stable", "user-a").state == expected
+
+
+async def test_missing_position_and_nonunit_rate(coordinator):
+    player = NavidromePlayer(coordinator, "stable", "user-a")
+    for report in [entry(positionMs=None), entry(playbackRate=1.5)]:
+        publish(coordinator, [report])
+        assert player.media_position is None
+        assert player.media_position_updated_at is None
+
+
+async def test_idle_unavailable_rename_delete(coordinator):
+    publish(coordinator, [entry()])
+    player = NavidromePlayer(coordinator, "stable", "user-a")
+    publish(coordinator, [])
+    assert player.state == MediaPlayerState.IDLE
+    assert player.available
+    assert player.media_title is None and player.media_image_hash is None
+    coordinator.users["user-a"] = User("user-a", "Renamed")
+    publish(coordinator, [])
+    assert player.name == "Navidrome Renamed"
+    assert player.unique_id == "stable:user-a"
+    coordinator.users = {}
+    publish(coordinator, [])
+    assert not player.available
+
+
+async def test_dynamic_users_not_clients(coordinator, hass):
+    added = []
+    callbacks = []
+    config_entry = Mock(runtime_data=coordinator, entry_id="stable")
+    config_entry.async_on_unload.side_effect = callbacks.append
+    await setup_players(hass, config_entry, lambda entities: added.extend(entities))
+    assert len(added) == 1
+    publish(coordinator, [entry(), entry(playerName="Tablet")])
+    assert len(added) == 1
+    coordinator.users["user-b"] = User("user-b", "Bob")
+    publish(coordinator, [])
+    assert len(added) == 2
+    for unsubscribe in callbacks:
+        unsubscribe()
+    assert not coordinator._listeners
+
+
+async def test_setup_unload(coordinator, hass):
+    config_entry = Mock(
+        data={"url": "https://music.example", "username": "admin", "password": "secret"}
+    )
+    hass.config_entries = Mock(
+        async_forward_entry_setups=AsyncMock(), async_unload_platforms=AsyncMock(return_value=True)
+    )
+    with (
+        patch("custom_components.navidrome.NavidromeCoordinator", return_value=coordinator),
+        patch.object(coordinator, "async_start", new=AsyncMock()),
+        patch.object(coordinator, "async_stop", new=AsyncMock()) as stop,
+    ):
+        assert await async_setup_entry(hass, config_entry) is None
+        assert config_entry.runtime_data is coordinator
+        assert await async_unload_entry(hass, config_entry)
+        stop.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [(InvalidAuth, ConfigEntryAuthFailed), (CannotConnect, ConfigEntryNotReady)],
+)
+async def test_setup_errors(coordinator, hass, error, expected):
+    config_entry = Mock(
+        data={"url": "https://music.example", "username": "admin", "password": "secret"}
+    )
+    with (
+        patch("custom_components.navidrome.NavidromeCoordinator", return_value=coordinator),
+        patch.object(coordinator, "async_start", new=AsyncMock(side_effect=error("failed"))),
+    ):
+        with pytest.raises(expected):
+            await async_setup_entry(hass, config_entry)
+
+
+async def test_real_ha_entry_and_registry_lifecycle(hass, server):
+    """Load through HA itself, not a mocked forwarding or entity registry."""
+    from types import MappingProxyType
+
+    from homeassistant import auth, bootstrap, config_entries, loader
+    from homeassistant.helpers import entity_registry as er
+
+    loader.async_setup(hass)
+    hass.config.skip_pip = True
+    hass.config_entries = config_entries.ConfigEntries(hass, {})
+    assert await bootstrap.async_load_base_functionality(hass)
+    hass.auth = await auth.auth_manager_from_config(hass, [{"type": "homeassistant"}], [])
+    config_entry = config_entries.ConfigEntry(
+        version=1,
+        minor_version=1,
+        domain="navidrome",
+        title="Navidrome",
+        data={"url": server["url"], "username": "admin", "password": "secret"},
+        options={},
+        source="user",
+        unique_id=None,
+        discovery_keys=MappingProxyType({}),
+        subentries_data=None,
+    )
+    await hass.config_entries.async_add(config_entry)
+    await hass.async_block_till_done()
+    assert config_entry.state == config_entries.ConfigEntryState.LOADED
+    registry = er.async_get(hass)
+    entities = er.async_entries_for_config_entry(registry, config_entry.entry_id)
+    assert len(entities) == 2
+    assert {entity.unique_id for entity in entities} == {
+        f"{config_entry.entry_id}:user-a",
+        f"{config_entry.entry_id}:user-b",
+    }
+    assert all(hass.states.get(entity.entity_id).state == "idle" for entity in entities)
+    alice = next(entity for entity in entities if entity.unique_id.endswith(":user-a"))
+    updated = asyncio.Event()
+
+    def changed(event):
+        state = event.data.get("new_state")
+        if event.data["entity_id"] == alice.entity_id and state and state.state == "paused":
+            updated.set()
+
+    unsubscribe = hass.bus.async_listen("state_changed", changed)
+    server["entries"] = [entry(state="paused")]
+    for queue in list(server["streams"]):
+        await queue.put(b'event: nowPlayingCount\ndata: {"count": 1}\n\n')
+    async with asyncio.timeout(2):
+        await updated.wait()
+    unsubscribe()
+    assert hass.states.get(alice.entity_id).attributes["media_title"] == "First"
+    runtime = config_entry.runtime_data
+    assert await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert not runtime._tasks
+    assert {
+        entity.entity_id
+        for entity in er.async_entries_for_config_entry(registry, config_entry.entry_id)
+    } == {entity.entity_id for entity in entities}
+    runtime = config_entry.runtime_data
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
+    assert not runtime._tasks
+    assert not runtime._listeners

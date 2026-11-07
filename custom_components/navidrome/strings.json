@@ -1,0 +1,35 @@
+{
+  "title": "Navidrome Now Playing",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Monitor All Navidrome Users",
+        "description": "Requires a native Navidrome administrator login. Listening activity for ALL users will be exposed in Home Assistant, including idle users. This integration performs read-only requests, but the stored account retains full administrator privileges. Enable EnableNowPlaying and DevActivityPanel on Navidrome. External-auth-only logins are not supported.",
+        "data": {"url": "Server base URL (including BasePath)", "username": "Administrator username", "password": "Password"}
+      },
+      "reauth_confirm": {
+        "title": "Update Administrator Login",
+        "description": "Enter a valid native administrator login to continue all-user monitoring.",
+        "data": {"username": "Administrator username", "password": "Password"}
+      },
+      "reconfigure": {
+        "title": "Reconfigure Navidrome Connection",
+        "description": "Entity identities are retained. Leave the password empty to keep the stored password. Use only the same logical server; connecting a different server may reuse coincident native user IDs.",
+        "data": {"url": "Server base URL (including BasePath)", "username": "Administrator username", "password": "New password"}
+      }
+    },
+    "error": {
+      "invalid_url": "Enter an HTTP(S) base URL without embedded credentials, a query or fragment.",
+      "invalid_auth": "The native username or password was rejected.",
+      "not_admin": "An administrator account is required for the complete user roster and library visibility.",
+      "cannot_connect": "Cannot connect. Check DNS, TLS certificates, network access and reverse-proxy timeouts.",
+      "not_supported": "Requires stable Navidrome 0.64.2 or newer with EnableNowPlaying and DevActivityPanel enabled. Check BasePath, login redirects and SSE proxy buffering.",
+      "invalid_response": "The server returned malformed or oversized data. Verify the URL points to Navidrome."
+    },
+    "abort": {
+      "already_configured": "This server URL is already configured.",
+      "reauth_successful": "Administrator credentials updated.",
+      "reconfigure_successful": "Connection updated; entity identities retained."
+    }
+  }
+}

@@ -1,0 +1,1 @@
+"""Navidrome integration tests."""
