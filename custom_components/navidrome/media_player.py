@@ -1,5 +1,6 @@
 """Exactly one persistent, read-only now-playing entity per native user ID."""
 
+import logging
 from hashlib import sha256
 from typing import Any
 
@@ -17,6 +18,8 @@ from . import NavidromeConfigEntry
 from .api import InvalidAuth, NavidromeError, NotAdmin
 from .coordinator import NavidromeCoordinator
 from .selection import Playback
+
+_LOGGER = logging.getLogger(__name__)
 
 STATES = {
     "starting": MediaPlayerState.BUFFERING,
@@ -137,10 +140,10 @@ class NavidromePlayer(CoordinatorEntity[NavidromeCoordinator], MediaPlayerEntity
         if self.available and (cover_id := self._media("cover_id")):
             try:
                 return await self.coordinator.api.image(cover_id)
-            except (InvalidAuth, NotAdmin) as error:
-                self.coordinator._failed(error)
-            except NavidromeError:
-                pass
+            except NavidromeError as error:
+                _LOGGER.warning("Unable to fetch Navidrome artwork: %s", error)
+                if isinstance(error, (InvalidAuth, NotAdmin)):
+                    self.coordinator._failed(error)
         return None, None
 
     @property

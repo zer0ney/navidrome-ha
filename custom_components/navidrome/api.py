@@ -131,13 +131,16 @@ class NavidromeClient:
     @staticmethod
     def _check_status(response: ClientResponse) -> None:
         if response.status == 401:
-            raise InvalidAuth("Authentication rejected")
+            raise InvalidAuth("Authentication rejected (HTTP 401)")
         if response.status == 403:
-            raise NotAdmin("Administrator access required")
+            raise NotAdmin("Administrator access required (HTTP 403)")
         if 300 <= response.status < 500:
-            raise NotSupported("Endpoint missing or redirected; check server URL and proxy")
+            raise NotSupported(
+                f"Endpoint missing or redirected (HTTP {response.status}); "
+                "check server URL and proxy"
+            )
         if response.status != 200:
-            raise CannotConnect("Server request failed")
+            raise CannotConnect(f"Server request failed (HTTP {response.status})")
 
     async def _json(self, response: ClientResponse) -> Any:
         if response.content_type != "application/json":
@@ -342,11 +345,24 @@ class NavidromeClient:
             self._images.move_to_end(key)
             return cached[1], cached[2]
         async with self._request(
-            "rest/getCoverArt.view", rest=True, params={"id": cover_id, "size": size}
+            "rest/getCoverArt", rest=True, params={"id": cover_id, "size": size}
         ) as response:
             content_type = response.content_type
+            if content_type == "application/json":
+                data = await self._json(response)
+                root = data.get("subsonic-response") if isinstance(data, dict) else None
+                error = root.get("error") if isinstance(root, dict) else None
+                code = error.get("code") if isinstance(error, dict) else None
+                if isinstance(code, int) and not isinstance(code, bool):
+                    error_type = InvalidAuth if code in {40, 41} else ProtocolError
+                    raise error_type(f"Cover art request failed (Subsonic code {code})")
+                raise ProtocolError(
+                    "Artwork endpoint returned application/json instead of an image"
+                )
             if content_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
-                raise ProtocolError("Server did not return supported artwork")
+                raise ProtocolError(
+                    f"Artwork endpoint returned {content_type} instead of a supported image"
+                )
             body = await bounded_body(response, MAX_IMAGE_BYTES)
         self._images[key] = (time.monotonic(), body, content_type)
         self._images.move_to_end(key)

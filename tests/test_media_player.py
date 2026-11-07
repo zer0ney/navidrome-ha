@@ -78,6 +78,26 @@ async def test_artwork_without_cover_id(coordinator, hass, server, cover_art):
     assert server["requests"][-1][1]["id"] == "mf-track-1"
 
 
+async def test_artwork_failure_is_logged(coordinator, hass, server, caplog):
+    publish(coordinator, [entry()])
+    player = NavidromePlayer(coordinator, "stable", "user-a")
+    player.hass = hass
+    player.entity_id = "media_player.navidrome_alice"
+    server["artwork_response"] = {
+        "body": b"<html>secret</html>",
+        "content_type": "text/html",
+    }
+    request = make_mocked_request("GET", player.entity_picture)
+    request[KEY_AUTHENTICATED] = False
+    view = MediaPlayerImageView(Mock(get_entity=Mock(return_value=player)))
+    response = await view.get(request, player.entity_id)
+    assert response.status == 404
+    assert "Unable to fetch Navidrome artwork" in caplog.text
+    assert "text/html" in caplog.text
+    assert "secret" not in caplog.text
+    assert "salted-token" not in caplog.text
+
+
 @pytest.mark.parametrize(
     ("state", "expected"),
     [

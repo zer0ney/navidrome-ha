@@ -97,6 +97,32 @@ async def test_artwork_cache(client, server):
     assert await client.image("cover") == (b"image-bytes", "image/png")
     assert await client.image("cover") == (b"image-bytes", "image/png")
     assert len(server["requests"]) == 1
+    assert server["requests"][0][0] == "/music/rest/getCoverArt"
+
+
+@pytest.mark.parametrize(
+    ("status", "content_type", "code", "error", "message"),
+    [
+        (404, "text/plain", None, NotSupported, "HTTP 404"),
+        (200, "text/html", None, ProtocolError, "text/html"),
+        (200, "application/json", 40, InvalidAuth, "Subsonic code 40"),
+        (200, "application/json", 70, ProtocolError, "Subsonic code 70"),
+    ],
+)
+async def test_artwork_errors_are_identifiable(
+    client, server, status, content_type, code, error, message
+):
+    body = json.dumps(
+        {"subsonic-response": {"status": "failed", "error": {"code": code, "message": "secret"}}}
+    ).encode()
+    server["artwork_response"] = {
+        "body": body,
+        "content_type": content_type,
+        "status": status,
+    }
+    with pytest.raises(error, match=message) as caught:
+        await client.image("cover")
+    assert "secret" not in str(caught.value)
 
 
 @pytest.mark.parametrize(

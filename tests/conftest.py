@@ -45,6 +45,7 @@ async def server(aiohttp_server):
         "rest_error": None,
         "reject_native": 0,
         "version": "0.64.2 (source-fixture)",
+        "artwork_response": {"body": b"image-bytes", "content_type": "image/png"},
     }
 
     async def login(request):
@@ -78,8 +79,10 @@ async def server(aiohttp_server):
                     "X-ND-Authorization": "jwt-renewed",
                 },
             )
-        if request.path.endswith("getCoverArt.view"):
-            return web.Response(body=b"image-bytes", content_type="image/png")
+        if request.path.removesuffix(".view").endswith("/getCoverArt"):
+            assert request.query["t"] == "salted-token"
+            assert request.query["s"] == "salt"
+            return web.Response(**state["artwork_response"])
         assert request.query["t"] == "salted-token"
         assert request.query["s"] == "salt"
         root = {
