@@ -150,11 +150,15 @@ class NavidromePlayer(CoordinatorEntity[NavidromeCoordinator], MediaPlayerEntity
     def extra_state_attributes(self) -> dict[str, Any]:
         if not (playback := self.playback):
             return {}
+        song_id = self.media_content_id
+        lyrics_status, lyrics = self.coordinator.lyrics_for(song_id)
         return {
             "username": playback.user.username,
             "source_client": self._media("client"),
             "active_session_count": playback.session_count,
             "playback_rate": self._media("rate"),
+            "lyrics_status": lyrics_status,
+            "lyrics": dict(lyrics, song_id=song_id) if lyrics else None,
             "last_observed_change": playback.changed_at.isoformat()
             if playback.changed_at
             else None,

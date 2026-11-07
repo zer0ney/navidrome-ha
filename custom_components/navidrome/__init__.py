@@ -1,10 +1,14 @@
 """Native-push Navidrome now playing."""
 
+from pathlib import Path
+
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.typing import ConfigType
 
 from .api import InvalidAuth, NavidromeClient, NavidromeError, NotAdmin, NotSupported
 from .coordinator import NavidromeCoordinator
@@ -12,6 +16,20 @@ from .coordinator import NavidromeCoordinator
 type NavidromeConfigEntry = ConfigEntry[NavidromeCoordinator]
 
 PLATFORMS = [Platform.MEDIA_PLAYER]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Serve the bundled card once, independently of config-entry reloads."""
+    await hass.http.async_register_static_paths(
+        [
+            StaticPathConfig(
+                "/navidrome/lyrics-card.js",
+                str(Path(__file__).parent / "frontend" / "navidrome-lyrics-card.js"),
+                cache_headers=True,
+            )
+        ]
+    )
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: NavidromeConfigEntry) -> None:

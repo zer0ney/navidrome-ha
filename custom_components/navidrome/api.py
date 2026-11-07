@@ -3,6 +3,7 @@
 import asyncio
 import codecs
 import json
+import math
 import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator
@@ -21,11 +22,12 @@ from .const import (
     MAX_IMAGE_BYTES,
     MAX_IMAGE_CACHE_BYTES,
     MAX_JSON_BYTES,
+    MAX_LYRICS_BYTES,
     MIN_SERVER_VERSION,
     REQUEST_TIMEOUT,
     WATCHDOG,
 )
-from .models import Session, User
+from .models import Session, User, number, text
 
 
 class NavidromeError(Exception):
@@ -296,6 +298,71 @@ class NavidromeClient:
                 return [Session.from_json(item) for item in entries]
             except ValueError:
                 raise ProtocolError("Invalid snapshot entry") from None
+
+    async def lyrics(self, song_id: str) -> dict[str, Any] | None:
+        """Prefer synced lyrics, retaining only bounded, validated display data."""
+        async with self._request(
+            "rest/getLyricsBySongId", rest=True, params={"id": song_id}
+        ) as response:
+            data = await self._json(response)
+        root = data.get("subsonic-response") if isinstance(data, dict) else None
+        if not isinstance(root, dict):
+            raise ProtocolError("Missing lyrics Subsonic response")
+        if root.get("status") != "ok":
+            error = root.get("error")
+            code = error.get("code") if isinstance(error, dict) else None
+            if code == 40 or code == 41:
+                raise InvalidAuth("Lyrics credentials rejected")
+            if code == 70:
+                return None
+            raise ProtocolError("Lyrics request failed")
+        container = root.get("lyricsList")
+        if container is None:
+            return None
+        if not isinstance(container, dict):
+            raise ProtocolError("Invalid lyrics list")
+        variants = container.get("structuredLyrics") or []
+        if not isinstance(variants, list):
+            raise ProtocolError("Invalid structured lyrics")
+        candidates = []
+        for variant in variants:
+            if not isinstance(variant, dict) or not isinstance(variant.get("line", []), list):
+                raise ProtocolError("Invalid lyrics variant")
+            source = variant.get("line", [])
+            if len(source) > 2000:
+                raise ProtocolError("Lyrics exceed line limit")
+            lines = []
+            for line in source:
+                if not isinstance(line, dict) or not isinstance(line.get("value"), str):
+                    raise ProtocolError("Invalid lyrics line")
+                lines.append({"value": line["value"], "start": number(line.get("start"))})
+            if not any(line["value"].strip() for line in lines):
+                continue
+            synced = variant.get("synced") is True and all(
+                line["start"] is not None for line in lines
+            )
+            if synced:
+                lines.sort(key=lambda line: line["start"])
+            else:
+                lines = [{"value": line["value"]} for line in lines]
+            result = {"synced": synced, "line": lines}
+            for field in ("lang", "displayArtist", "displayTitle"):
+                if value := text(variant.get(field)):
+                    result[field] = value
+            offset = variant.get("offset", 0)
+            if (
+                isinstance(offset, (int, float))
+                and not isinstance(offset, bool)
+                and math.isfinite(offset)
+            ):
+                result["offset"] = offset
+            if len(json.dumps(result).encode()) > MAX_LYRICS_BYTES:
+                raise ProtocolError("Lyrics exceed attribute size limit")
+            candidates.append(result)
+        return next(
+            (candidate for candidate in candidates if candidate["synced"]),
+            candidates[0] if candidates else None,
+        )
 
     def check_server_start(self, event: ServerSentEvent) -> None:
         """Require a released source-compatible Navidrome version."""

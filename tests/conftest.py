@@ -46,6 +46,7 @@ async def server(aiohttp_server):
         "reject_native": 0,
         "version": "0.64.2 (source-fixture)",
         "artwork_response": {"body": b"image-bytes", "content_type": "image/png"},
+        "lyrics": [],
     }
 
     async def login(request):
@@ -91,6 +92,10 @@ async def server(aiohttp_server):
             "serverVersion": state["version"],
             "nowPlaying": {"entry": state["entries"]},
         }
+        if request.path.endswith("/getLyricsBySongId"):
+            assert request.query["id"]
+            root.pop("nowPlaying")
+            root["lyricsList"] = {"structuredLyrics": state["lyrics"]}
         if state["rest_error"]:
             root.update(status="failed", error={"code": state["rest_error"]})
         return web.json_response({"subsonic-response": root})

@@ -110,6 +110,84 @@ async def test_stream_initial_snapshot_and_unload(hass, client, server):
     assert not client._session.closed
 
 
+async def test_lyrics_are_nonblocking_and_deduplicated(hass, client, server):
+    server["entries"] = [entry(), entry(username="Bob")]
+    coordinator = NavidromeCoordinator(hass, Mock(), client)
+    entered, release = asyncio.Event(), asyncio.Event()
+    lyrics = {"synced": True, "line": [{"start": 0, "value": "A new day"}]}
+
+    async def blocked_lyrics(song_id):
+        entered.set()
+        await release.wait()
+        return lyrics
+
+    with patch.object(client, "lyrics", new=AsyncMock(side_effect=blocked_lyrics)) as fetch:
+        await coordinator.async_start()
+        async with asyncio.timeout(2):
+            await entered.wait()
+        assert coordinator.last_update_success
+        assert coordinator.data["user-a"].selected.title == "First"
+        assert coordinator.lyrics_for("track-1") == ("loading", None)
+        coordinator.invalidate()
+        await coordinator._refresh_task
+        fetch.assert_awaited_once_with("track-1")
+        release.set()
+        await asyncio.gather(*coordinator._lyrics_tasks.values())
+        assert coordinator.lyrics_for("track-1") == ("synced", lyrics)
+    await coordinator.async_stop()
+    assert not coordinator._lyrics_tasks
+
+
+async def test_lyrics_failure_does_not_fail_playback(hass, client, server):
+    server["entries"] = [entry()]
+    coordinator = NavidromeCoordinator(hass, Mock(), client)
+    with patch.object(
+        client, "lyrics", new=AsyncMock(side_effect=CannotConnect("failed"))
+    ) as fetch:
+        await coordinator.async_start()
+        await asyncio.gather(*coordinator._lyrics_tasks.values())
+        assert coordinator.last_update_success
+        assert coordinator.lyrics_for("track-1") == ("error", None)
+        coordinator.invalidate()
+        await coordinator._refresh_task
+        fetch.assert_awaited_once()
+    await coordinator.async_stop()
+
+
+async def test_missing_lyrics_are_cached(hass, client, server):
+    server["entries"] = [entry()]
+    coordinator = NavidromeCoordinator(hass, Mock(), client)
+    await coordinator.async_start()
+    await asyncio.gather(*coordinator._lyrics_tasks.values())
+    assert coordinator.lyrics_for("track-1") == ("none", None)
+    coordinator.invalidate()
+    await coordinator._refresh_task
+    assert sum(path.endswith("/getLyricsBySongId") for path, _, _ in server["requests"]) == 1
+    await coordinator.async_stop()
+
+
+async def test_unload_cancels_pending_lyrics(hass, client, server):
+    server["entries"] = [entry()]
+    coordinator = NavidromeCoordinator(hass, Mock(), client)
+    entered = asyncio.Event()
+
+    async def blocked_lyrics(song_id):
+        entered.set()
+        await asyncio.Event().wait()
+
+    with patch.object(client, "lyrics", new=AsyncMock(side_effect=blocked_lyrics)):
+        try:
+            await coordinator.async_start()
+            async with asyncio.timeout(2):
+                await entered.wait()
+            async with asyncio.timeout(2):
+                await coordinator.async_stop()
+            assert not coordinator._tasks
+            assert not coordinator._lyrics_tasks
+        finally:
+            await coordinator.async_stop()
+
+
 async def test_same_count_burst_has_immediate_trailing_refresh(hass, client, server):
     coordinator = NavidromeCoordinator(hass, Mock(), client)
     await coordinator.async_start()
@@ -188,6 +266,7 @@ async def test_unchanged_snapshot_does_not_notify_listeners(hass, client, server
     server["entries"] = [entry()]
     coordinator = NavidromeCoordinator(hass, Mock(), client, clock=lambda: NOW)
     await coordinator.async_start()
+    await asyncio.gather(*coordinator._lyrics_tasks.values())
     listener = Mock()
     unsubscribe = coordinator.async_add_listener(listener)
     coordinator.invalidate()

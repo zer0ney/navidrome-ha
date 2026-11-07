@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Navidrome Lyrics</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Trebuchet MS", sans-serif; --ha-font-family-body: "Trebuchet MS", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; padding: 28px; background: #121514; color: #efefec; }
+    main { width: 100%; max-width: 1120px; margin: 0 auto; }
+    nav { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 16px; }
+    label { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
+    select, button { color: inherit; background: #252a27; border: 1px solid #ffffff20; border-radius: 5px; min-height: 36px; font: inherit; font-size: 13px; }
+    select { max-width: 200px; padding: 4px 10px; }
+    button { width: 36px; cursor: pointer; }
+    @media (max-width: 620px) { body { padding: 12px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <navidrome-lyrics-card></navidrome-lyrics-card>
+    <nav aria-label="Preview controls">
+      <label><input id="show-buttons" type="checkbox" checked>Buttons</label>
+      <label><input id="show-background" type="checkbox" checked>Background</label>
+      <select id="text-align" aria-label="Text alignment">
+        <option value="left">Align left</option>
+        <option value="center">Align center</option>
+        <option value="right">Align right</option>
+      </select>
+      <select id="scenario" aria-label="Lyrics state">
+        <option value="synced">Synced lyrics</option>
+        <option value="unsynced">Unsynced lyrics</option>
+        <option value="none">No lyrics</option>
+        <option value="loading">Loading</option>
+        <option value="error">Lookup failed</option>
+        <option value="idle">Idle</option>
+        <option value="unavailable">Unavailable</option>
+      </select>
+      <button id="pause" title="Pause preview" aria-label="Pause preview">&#10074;&#10074;</button>
+    </nav>
+  </main>
+  <script type="module">
+    import { playbackPosition } from "../custom_components/navidrome/frontend/navidrome-lyrics-card.js";
+
+    class PreviewIcon extends HTMLElement {
+      static observedAttributes = ["icon"];
+      connectedCallback() { this.draw(); }
+      attributeChangedCallback() { this.draw(); }
+      draw() {
+        const icons = {
+          "mdi:crosshairs-gps": "\u2299", "mdi:fullscreen": "\u26f6", "mdi:fullscreen-exit": "\u26f6",
+          "mdi:format-quote-close": "\u201d",
+        };
+        this.style.cssText = "display:inline-flex;align-items:center;justify-content:center;font-size:var(--mdc-icon-size,20px);line-height:1";
+        this.textContent = icons[this.getAttribute("icon")] ?? "";
+      }
+    }
+    customElements.define("ha-icon", PreviewIcon);
+    const card = document.querySelector("navidrome-lyrics-card");
+    const settings = {
+      entity: "media_player.navidrome_northbound", show_buttons: true, show_background: true, text_align: "left",
+    };
+    function configure(options = {}) {
+      Object.assign(settings, options);
+      card.setConfig(settings);
+      document.querySelector("#show-buttons").checked = settings.show_buttons;
+      document.querySelector("#show-background").checked = settings.show_background;
+      document.querySelector("#text-align").value = settings.text_align;
+    }
+    configure();
+    document.querySelector("#show-buttons").addEventListener("change", (event) => configure({ show_buttons: event.target.checked }));
+    document.querySelector("#show-background").addEventListener("change", (event) => configure({ show_background: event.target.checked }));
+    document.querySelector("#text-align").addEventListener("change", (event) => configure({ text_align: event.target.value }));
+    const words = [
+      "After the rain", "The streetlights fade", "A quiet morning", "And the plans we made",
+      "We take the long way home", "Past the water and the pines", "Let the hours find their own way",
+      "Let the day take its time", "There is a light on the horizon", "There is a room for us to grow",
+      "And all the things we carry", "Are the things we learn to know", "After the rain",
+      "The sky is open wide", "We take the long way home", "With the morning on our side",
+    ];
+    const original = {
+      media_content_id: "preview-track", media_duration: 105, media_position: 19,
+      media_position_updated_at: new Date().toISOString(), playback_rate: 1,
+    };
+    let entity = { entity_id: "media_player.navidrome_northbound", state: "playing", attributes: { ...original } };
+    function apply() {
+      card.hass = { states: { [entity.entity_id]: entity } };
+    }
+    function setScenario(scenario) {
+      const attributes = { ...original, lyrics_status: scenario, media_position_updated_at: new Date().toISOString() };
+      if (["synced", "unsynced"].includes(scenario)) {
+        attributes.lyrics = {
+          song_id: original.media_content_id, synced: scenario === "synced", lang: "eng", offset: 0,
+          line: words.map((value, index) => scenario === "synced" ? { value, start: index * 6000 } : { value }),
+        };
+      }
+      if (["idle", "unavailable"].includes(scenario)) {
+        for (const key of ["media_content_id", "media_position", "media_duration"]) delete attributes[key];
+      }
+      entity = { ...entity, state: ["idle", "unavailable"].includes(scenario) ? scenario : "playing", attributes };
+      document.querySelector("#scenario").value = scenario;
+      document.querySelector("#pause").textContent = "\u275a\u275a";
+      apply();
+    }
+    document.querySelector("#scenario").addEventListener("change", (event) => setScenario(event.target.value));
+    document.querySelector("#pause").addEventListener("click", (event) => {
+      const position = playbackPosition(entity);
+      entity = { ...entity, state: entity.state === "playing" ? "paused" : "playing", attributes: { ...entity.attributes, media_position: position, media_position_updated_at: new Date().toISOString() } };
+      event.currentTarget.textContent = entity.state === "playing" ? "\u275a\u275a" : "\u25b6";
+      event.currentTarget.title = entity.state === "playing" ? "Pause preview" : "Resume preview";
+      event.currentTarget.setAttribute("aria-label", event.currentTarget.title);
+      apply();
+    });
+    globalThis.preview = {
+      setScenario,
+      setConfig: configure,
+      get config() { return { ...settings }; },
+      seek(position) {
+        entity = { ...entity, attributes: { ...entity.attributes, media_position: position, media_position_updated_at: new Date().toISOString() } };
+        apply();
+      },
+      setEntity(next) { entity = next; apply(); },
+      get entity() { return entity; },
+    };
+    setScenario("synced");
+  </script>
+</body>
+</html>

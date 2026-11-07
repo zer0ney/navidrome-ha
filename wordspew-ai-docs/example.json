@@ -1,0 +1,177 @@
+{
+  "subsonic-response": {
+    "status": "ok",
+    "version": "1.16.1",
+    "type": "navidrome",
+    "serverVersion": "0.64.2 (10114574)",
+    "openSubsonic": true,
+    "lyricsList": {
+      "structuredLyrics": [
+        {
+          "displayArtist": "Porches",
+          "displayTitle": "Rag",
+          "lang": "xxx",
+          "line": [
+            {
+              "start": 3560,
+              "value": "Bug in my bowl"
+            },
+            {
+              "start": 5670,
+              "value": "I watch your fingers on your skirt"
+            },
+            {
+              "start": 8510,
+              "value": "Spat pretty close"
+            },
+            {
+              "start": 11080,
+              "value": "I wanna fuck you at the moat tonight"
+            },
+            {
+              "start": 16050,
+              "value": "I wanna watch you take control tonight"
+            },
+            {
+              "start": 21410,
+              "value": "You always call it"
+            },
+            {
+              "start": 23430,
+              "value": "Sap girl pick a round"
+            },
+            {
+              "start": 26410,
+              "value": "There's someone hiding in the barn box"
+            },
+            {
+              "start": 29870,
+              "value": "Call my wife"
+            },
+            {
+              "start": 31590,
+              "value": "I dream the one about the goat tonight"
+            },
+            {
+              "start": 36790,
+              "value": "I dream the one about you most tonight"
+            },
+            {
+              "start": 41990,
+              "value": "You always call it"
+            },
+            {
+              "start": 44020,
+              "value": "She's in the rag"
+            },
+            {
+              "start": 46630,
+              "value": "Sally's standing next to me"
+            },
+            {
+              "start": 49380,
+              "value": "Someone's in the hall"
+            },
+            {
+              "start": 51750,
+              "value": "I'm actually kinda scared"
+            },
+            {
+              "start": 54440,
+              "value": "Don't know where I am"
+            },
+            {
+              "start": 57100,
+              "value": "World's fucking sick of us"
+            },
+            {
+              "start": 59790,
+              "value": "Bag in the hand"
+            },
+            {
+              "start": 62220,
+              "value": "Dog's biting extra nice"
+            },
+            {
+              "start": 66580,
+              "value": "Look out"
+            },
+            {
+              "start": 77550,
+              "value": "Fat ditch hold him down"
+            },
+            {
+              "start": 80420,
+              "value": "I push the bullet in the fruit meat through a cow"
+            },
+            {
+              "start": 85810,
+              "value": "I recognize you from the pound tonight"
+            },
+            {
+              "start": 90820,
+              "value": "I really hope I see you 'round tonight"
+            },
+            {
+              "start": 96090,
+              "value": "You always call it"
+            },
+            {
+              "start": 98270,
+              "value": "Gash pack run away"
+            },
+            {
+              "start": 101150,
+              "value": "Or just go with it, it's a freak show anyway"
+            },
+            {
+              "start": 106540,
+              "value": "And if you wanna make it hurt today"
+            },
+            {
+              "start": 111510,
+              "value": "Then go ahead and make it hurt okay"
+            },
+            {
+              "start": 116950,
+              "value": "You always call it"
+            },
+            {
+              "start": 118800,
+              "value": "She's in the rag"
+            },
+            {
+              "start": 121580,
+              "value": "Sally's standing next to me"
+            },
+            {
+              "start": 124160,
+              "value": "Someone's in the hall"
+            },
+            {
+              "start": 126980,
+              "value": "Don't think I'm paranoid (whoa)"
+            },
+            {
+              "start": 129240,
+              "value": "Don't know where I was"
+            },
+            {
+              "start": 131880,
+              "value": "World's fucking sick of it"
+            },
+            {
+              "start": 134320,
+              "value": "Bag in the hand"
+            },
+            {
+              "start": 137150,
+              "value": "Dog's biting extra nice"
+            }
+          ],
+          "synced": true
+        }
+      ]
+    }
+  }
+}

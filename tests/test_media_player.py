@@ -10,7 +10,7 @@ from homeassistant.components.http import KEY_AUTHENTICATED
 from homeassistant.components.media_player import MediaPlayerImageView, MediaPlayerState
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
-from custom_components.navidrome import async_setup_entry, async_unload_entry
+from custom_components.navidrome import async_setup, async_setup_entry, async_unload_entry
 from custom_components.navidrome.api import CannotConnect, InvalidAuth
 from custom_components.navidrome.coordinator import NavidromeCoordinator
 from custom_components.navidrome.media_player import NavidromePlayer
@@ -35,6 +35,17 @@ def publish(coordinator, entries):
             coordinator.users, [Session.from_json(item) for item in entries], NOW
         )
     )
+
+
+async def test_card_resource_registration(hass):
+    from pathlib import Path
+
+    hass.http = Mock(async_register_static_paths=AsyncMock())
+    assert await async_setup(hass, {})
+    paths = hass.http.async_register_static_paths.call_args.args[0]
+    assert len(paths) == 1
+    assert paths[0].url_path == "/navidrome/lyrics-card.js"
+    assert Path(paths[0].path).is_file()
 
 
 async def test_metadata_artwork_no_secrets(coordinator, hass, server):
@@ -76,6 +87,41 @@ async def test_artwork_without_cover_id(coordinator, hass, server, cover_art):
     assert response.body == b"image-bytes"
     assert response.content_type == "image/png"
     assert server["requests"][-1][1]["id"] == "mf-track-1"
+
+
+async def test_late_lyrics_do_not_replace_current_track(coordinator):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def resolve(song_id):
+        if song_id == "track-1":
+            entered.set()
+            await release.wait()
+        return {"synced": True, "line": [{"start": 0, "value": song_id}]}
+
+    player = NavidromePlayer(coordinator, "stable", "user-a")
+    with patch.object(coordinator.api, "lyrics", new=AsyncMock(side_effect=resolve)):
+        try:
+            publish(coordinator, [entry()])
+            coordinator._schedule_lyrics()
+            original = coordinator._lyrics_tasks["track-1"]
+            async with asyncio.timeout(2):
+                await entered.wait()
+            assert player.extra_state_attributes["lyrics_status"] == "loading"
+            publish(coordinator, [entry(id="track-2")])
+            coordinator._schedule_lyrics()
+            await coordinator._lyrics_tasks["track-2"]
+            release.set()
+            await original
+            attributes = player.extra_state_attributes
+            assert attributes["lyrics_status"] == "synced"
+            assert attributes["lyrics"]["song_id"] == "track-2"
+            assert attributes["lyrics"]["line"][0]["value"] == "track-2"
+            publish(coordinator, [])
+            assert player.extra_state_attributes["lyrics_status"] == "none"
+            assert player.extra_state_attributes["lyrics"] is None
+        finally:
+            release.set()
+            await coordinator.async_stop()
 
 
 async def test_artwork_failure_is_logged(coordinator, hass, server, caplog):

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Any
@@ -52,6 +53,9 @@ class NavidromeCoordinator(DataUpdateCoordinator[dict[str, Playback]]):
         self._reducer = SelectionReducer()
         self._tasks: set[asyncio.Task] = set()
         self._refresh_task: asyncio.Task | None = None
+        self._lyrics: OrderedDict[str, tuple[float, str, dict[str, Any] | None]] = OrderedDict()
+        self._lyrics_tasks: dict[str, asyncio.Task] = {}
+        self._lyrics_semaphore = asyncio.Semaphore(4)
         self._stopped = False
         self._connected = False
         self._dirty = False
@@ -105,8 +109,54 @@ class NavidromeCoordinator(DataUpdateCoordinator[dict[str, Playback]]):
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        self._lyrics_tasks.clear()
         if not self._ready.done():
             self._ready.cancel()
+
+    def lyrics_for(self, song_id: str | None) -> tuple[str, dict[str, Any] | None]:
+        """Read the current song's lookup outcome without starting network work."""
+        if song_id is None:
+            return "none", None
+        if (cached := self._lyrics.get(song_id)) and cached[0] > time.monotonic():
+            self._lyrics.move_to_end(song_id)
+            return cached[1], cached[2]
+        return "loading", None
+
+    def _schedule_lyrics(self) -> None:
+        songs = {view.selected.track_id for view in self.data.values() if view.selected}
+        for song_id in songs:
+            if self.lyrics_for(song_id)[0] == "loading" and song_id not in self._lyrics_tasks:
+                self._lyrics_tasks[song_id] = self._spawn(self._fetch_lyrics(song_id), "lyrics")
+
+    async def _fetch_lyrics(self, song_id: str) -> None:
+        try:
+            try:
+                async with self._lyrics_semaphore:
+                    if not any(
+                        view.selected and view.selected.track_id == song_id
+                        for view in self.data.values()
+                    ):
+                        return
+                    lyrics = await self.api.lyrics(song_id)
+                status = ("synced" if lyrics["synced"] else "unsynced") if lyrics else "none"
+                ttl = 3600 if lyrics else 300
+            except NavidromeError as error:
+                _LOGGER.warning("Unable to fetch Navidrome lyrics: %s", error)
+                lyrics, status, ttl = None, "error", 30
+                if isinstance(error, (InvalidAuth, NotAdmin)):
+                    self._failed(error)
+            if self._stopped:
+                return
+            self._lyrics[song_id] = (time.monotonic() + ttl, status, lyrics)
+            self._lyrics.move_to_end(song_id)
+            while len(self._lyrics) > 64:
+                self._lyrics.popitem(last=False)
+            if any(
+                view.selected and view.selected.track_id == song_id for view in self.data.values()
+            ):
+                self.async_update_listeners()
+        finally:
+            self._lyrics_tasks.pop(song_id, None)
 
     @callback
     def invalidate(self, *, roster: bool = False, resync: bool = False) -> None:
@@ -190,6 +240,7 @@ class NavidromeCoordinator(DataUpdateCoordinator[dict[str, Playback]]):
                     self._last_roster = time.monotonic()
                 if not self.last_update_success or self.data != data:
                     self.async_set_updated_data(data)
+                self._schedule_lyrics()
                 if not self._ready.done():
                     self._ready.set_result(None)
                 attempt = 0

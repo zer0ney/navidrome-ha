@@ -93,6 +93,67 @@ async def test_subsonic_failure_200(client, server, code, error):
         await client.now_playing()
 
 
+@pytest.mark.parametrize("outcome", ["synced", "unsynced", "none"])
+async def test_lyrics_outcomes(client, server, outcome):
+    lines = [{"value": "A new day"}, {"value": "Another sky"}]
+    if outcome == "synced":
+        lines = [dict(line, start=index * 3500) for index, line in enumerate(lines)]
+    if outcome != "none":
+        server["lyrics"] = [{"synced": outcome == "synced", "lang": "eng", "line": lines}]
+    lyrics = await client.lyrics("track-1")
+    if outcome == "none":
+        assert lyrics is None
+    else:
+        assert lyrics["synced"] is (outcome == "synced")
+        assert lyrics["line"] == lines
+        assert lyrics["lang"] == "eng"
+    path, query, _ = server["requests"][-1]
+    assert path == "/music/rest/getLyricsBySongId"
+    assert query["id"] == "track-1"
+
+
+async def test_lyrics_prefer_synced_and_sort_times(client, server):
+    server["lyrics"] = [
+        {"synced": False, "line": [{"value": "Plain lyrics"}]},
+        {
+            "synced": True,
+            "offset": -100,
+            "line": [{"start": 3000, "value": "Later"}, {"start": 1000, "value": "Earlier"}],
+        },
+    ]
+    lyrics = await client.lyrics("track-1")
+    assert lyrics["synced"] is True
+    assert lyrics["offset"] == -100
+    assert [line["start"] for line in lyrics["line"]] == [1000, 3000]
+
+
+async def test_lyrics_missing_timestamps_are_unsynced(client, server):
+    server["lyrics"] = [{"synced": True, "line": [{"value": "Keep these words"}]}]
+    lyrics = await client.lyrics("track-1")
+    assert lyrics["synced"] is False
+    assert lyrics["line"] == [{"value": "Keep these words"}]
+
+
+@pytest.mark.parametrize(
+    ("code", "error"),
+    [(40, InvalidAuth), (70, None), (10, ProtocolError), ({"invalid": True}, ProtocolError)],
+)
+async def test_lyrics_errors_are_not_absence(client, server, code, error):
+    server["rest_error"] = code
+    if error is None:
+        assert await client.lyrics("track-1") is None
+    else:
+        with pytest.raises(error):
+            await client.lyrics("track-1")
+
+
+async def test_lyrics_attribute_size_is_bounded(client, server, monkeypatch):
+    monkeypatch.setattr("custom_components.navidrome.api.MAX_LYRICS_BYTES", 100)
+    server["lyrics"] = [{"synced": False, "line": [{"value": "x" * 200}]}]
+    with pytest.raises(ProtocolError, match="attribute size limit"):
+        await client.lyrics("track-1")
+
+
 async def test_artwork_cache(client, server):
     assert await client.image("cover") == (b"image-bytes", "image/png")
     assert await client.image("cover") == (b"image-bytes", "image/png")
