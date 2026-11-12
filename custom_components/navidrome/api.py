@@ -9,6 +9,7 @@ from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+from uuid import UUID
 
 from aiohttp import ClientError, ClientResponse, ClientSession, ClientTimeout
 from httpx_sse._decoders import SSEDecoder, SSELineDecoder
@@ -18,6 +19,7 @@ from yarl import URL
 
 from .const import (
     AUTH_HEADER,
+    COVER_ART_ARCHIVE_URL,
     MAX_EVENT_CHARS,
     MAX_IMAGE_BYTES,
     MAX_IMAGE_CACHE_BYTES,
@@ -298,6 +300,53 @@ class NavidromeClient:
                 return [Session.from_json(item) for item in entries]
             except ValueError:
                 raise ProtocolError("Invalid snapshot entry") from None
+
+    async def static_cover(self, album_id: str) -> str | None:
+        """Resolve a release's public front-cover URL without sending Navidrome credentials."""
+        async with self._request("rest/getAlbum", rest=True, params={"id": album_id}) as response:
+            data = await self._json(response)
+        root = data.get("subsonic-response") if isinstance(data, dict) else None
+        if not isinstance(root, dict):
+            raise ProtocolError("Missing album Subsonic response")
+        if root.get("status") != "ok":
+            error = root.get("error")
+            code = error.get("code") if isinstance(error, dict) else None
+            if code == 40 or code == 41:
+                raise InvalidAuth("Album credentials rejected")
+            if code == 70:
+                return None
+            raise ProtocolError("Album lookup failed")
+        album = root.get("album")
+        if not isinstance(album, dict):
+            raise ProtocolError("Invalid album metadata")
+        if not (release_id := text(album.get("musicBrainzId"))):
+            return None
+        try:
+            release = UUID(release_id)
+        except ValueError:
+            return None
+        if not release.int:
+            return None
+        url = f"{COVER_ART_ARCHIVE_URL}/release/{release}/front"
+        try:
+            async with self._session.head(
+                url,
+                headers={"Accept": "image/*", "User-Agent": "HomeAssistant-Navidrome"},
+                allow_redirects=False,
+                timeout=ClientTimeout(total=REQUEST_TIMEOUT),
+            ) as response:
+                if response.status == 404:
+                    return None
+                if response.status in {301, 302, 303, 307, 308}:
+                    if not response.headers.get("Location"):
+                        raise ProtocolError("Cover Art Archive redirect omitted image location")
+                elif response.status != 200:
+                    raise CannotConnect(f"Cover Art Archive returned HTTP {response.status}")
+                elif not response.content_type.startswith("image/"):
+                    raise ProtocolError("Cover Art Archive did not return an image")
+        except (ClientError, TimeoutError):
+            raise CannotConnect("Cannot connect to Cover Art Archive") from None
+        return url
 
     async def lyrics(self, song_id: str) -> dict[str, Any] | None:
         """Prefer synced lyrics, retaining only bounded, validated display data."""

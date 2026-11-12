@@ -4,6 +4,7 @@ DOMAIN = "navidrome"
 NAME = "Navidrome Now Playing"
 MIN_SERVER_VERSION = "0.64.2"
 AUTH_HEADER = "X-ND-Authorization"
+COVER_ART_ARCHIVE_URL = "https://coverartarchive.org"
 SNAPSHOT_INTERVAL = 60
 ROSTER_INTERVAL = 300
 WATCHDOG = 45

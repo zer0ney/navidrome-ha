@@ -18,6 +18,38 @@ select **Navidrome Now Playing** and enter:
 ## How to use
 Each user gets added as its own player entity in HA. The most recently interacted client is what shows - so pausing on one client and then immediately skipping a song on another will show the latter client.
 
+## Static Cover Art
+
+The player's normal `entity_picture` still uses Navidrome's artwork, including
+animated WebP. A separate `cover_art_static` attribute exposes the current album's
+public [Cover Art Archive](https://musicbrainz.org/doc/Cover_Art_Archive/API) URL:
+
+```text
+https://coverartarchive.org/release/{release-mbid}/front
+```
+
+The archive requires a MusicBrainz **release ID**, not a song/recording ID. The
+integration obtains the selected track's `albumId`, looks up its album through
+Navidrome's `getAlbum` endpoint, and uses the album's `musicBrainzId`. Albums must
+have the corresponding MusicBrainz release tag in Navidrome.
+
+The lookup runs in the background and checks availability with a HEAD request,
+without downloading another image into HA. Requests are deduplicated per album;
+successful lookups are cached for 24 hours, missing covers/IDs for one hour, and
+temporary errors for five minutes, with at most 128 cached albums. Archive errors
+do not make playback unavailable. No Navidrome credentials are sent to the archive.
+
+`cover_art_static` is `null` while loading, when the album ID or release MBID is
+missing/invalid, or when no cover can be retrieved. Switching albums never keeps
+the previous album's static cover. A dashboard using this URL needs internet
+access to the Cover Art Archive and its image host.
+
+For templates:
+
+```jinja
+{{ state_attr('media_player.navidrome_alice', 'cover_art_static') }}
+```
+
 ## Lyrics
 
 The integration looks up the selected song with Navidrome's

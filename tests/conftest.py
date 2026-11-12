@@ -47,6 +47,7 @@ async def server(aiohttp_server):
         "version": "0.64.2 (source-fixture)",
         "artwork_response": {"body": b"image-bytes", "content_type": "image/png"},
         "lyrics": [],
+        "album": {},
     }
 
     async def login(request):
@@ -96,6 +97,10 @@ async def server(aiohttp_server):
             assert request.query["id"]
             root.pop("nowPlaying")
             root["lyricsList"] = {"structuredLyrics": state["lyrics"]}
+        if request.path.endswith("/getAlbum"):
+            assert request.query["id"]
+            root.pop("nowPlaying")
+            root["album"] = state["album"]
         if state["rest_error"]:
             root.update(status="failed", error={"code": state["rest_error"]})
         return web.json_response({"subsonic-response": root})
@@ -131,6 +136,28 @@ async def server(aiohttp_server):
     yield state
     for queue in list(state["streams"]):
         await queue.put(None)
+
+
+@pytest.fixture
+async def cover_archive(aiohttp_server, monkeypatch):
+    state = {"requests": [], "status": 307}
+
+    async def front(request):
+        state["requests"].append((request.method, request.path, dict(request.query)))
+        assert "X-ND-Authorization" not in request.headers
+        assert "Authorization" not in request.headers
+        assert not request.query
+        headers = {"Location": "https://archive.org/static-cover.jpg"}
+        return web.Response(status=state["status"], headers=headers, content_type="image/jpeg")
+
+    app = web.Application()
+    app.router.add_head("/release/{release_id}/front", front)
+    http_server = await aiohttp_server(app)
+    state["url"] = str(http_server.make_url("/")).rstrip("/")
+    monkeypatch.setattr(
+        "custom_components.navidrome.api.COVER_ART_ARCHIVE_URL", state["url"], raising=False
+    )
+    return state
 
 
 @pytest.fixture

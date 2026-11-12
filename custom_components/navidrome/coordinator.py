@@ -56,6 +56,9 @@ class NavidromeCoordinator(DataUpdateCoordinator[dict[str, Playback]]):
         self._lyrics: OrderedDict[str, tuple[float, str, dict[str, Any] | None]] = OrderedDict()
         self._lyrics_tasks: dict[str, asyncio.Task] = {}
         self._lyrics_semaphore = asyncio.Semaphore(4)
+        self._static_covers: OrderedDict[str, tuple[float, str | None]] = OrderedDict()
+        self._static_cover_tasks: dict[str, asyncio.Task] = {}
+        self._static_cover_semaphore = asyncio.Semaphore(2)
         self._stopped = False
         self._connected = False
         self._dirty = False
@@ -110,8 +113,62 @@ class NavidromeCoordinator(DataUpdateCoordinator[dict[str, Playback]]):
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self._lyrics_tasks.clear()
+        self._static_cover_tasks.clear()
         if not self._ready.done():
             self._ready.cancel()
+
+    def static_cover_for(self, album_id: str | None) -> str | None:
+        """Return only the selected album's cached, publicly accessible cover."""
+        if album_id is None:
+            return None
+        if (cached := self._static_covers.get(album_id)) and cached[0] > time.monotonic():
+            self._static_covers.move_to_end(album_id)
+            return cached[1]
+        return None
+
+    def _schedule_static_covers(self) -> None:
+        albums = {
+            view.selected.album_id
+            for view in self.data.values()
+            if view.selected and view.selected.album_id
+        }
+        for album_id in albums:
+            cached = self._static_covers.get(album_id)
+            if album_id not in self._static_cover_tasks and (
+                cached is None or cached[0] <= time.monotonic()
+            ):
+                self._static_cover_tasks[album_id] = self._spawn(
+                    self._fetch_static_cover(album_id), "static artwork"
+                )
+
+    async def _fetch_static_cover(self, album_id: str) -> None:
+        try:
+            try:
+                async with self._static_cover_semaphore:
+                    if not any(
+                        view.selected and view.selected.album_id == album_id
+                        for view in self.data.values()
+                    ):
+                        return
+                    cover = await self.api.static_cover(album_id)
+                ttl = 86400 if cover else 3600
+            except NavidromeError as error:
+                _LOGGER.warning("Unable to fetch static Navidrome artwork: %s", error)
+                cover, ttl = None, 300
+                if isinstance(error, (InvalidAuth, NotAdmin)):
+                    self._failed(error)
+            if self._stopped:
+                return
+            self._static_covers[album_id] = (time.monotonic() + ttl, cover)
+            self._static_covers.move_to_end(album_id)
+            while len(self._static_covers) > 128:
+                self._static_covers.popitem(last=False)
+            if any(
+                view.selected and view.selected.album_id == album_id for view in self.data.values()
+            ):
+                self.async_update_listeners()
+        finally:
+            self._static_cover_tasks.pop(album_id, None)
 
     def lyrics_for(self, song_id: str | None) -> tuple[str, dict[str, Any] | None]:
         """Read the current song's lookup outcome without starting network work."""
@@ -241,6 +298,7 @@ class NavidromeCoordinator(DataUpdateCoordinator[dict[str, Playback]]):
                 if not self.last_update_success or self.data != data:
                     self.async_set_updated_data(data)
                 self._schedule_lyrics()
+                self._schedule_static_covers()
                 if not self._ready.done():
                     self._ready.set_result(None)
                 attempt = 0

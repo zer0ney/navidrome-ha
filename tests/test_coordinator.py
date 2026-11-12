@@ -188,6 +188,86 @@ async def test_unload_cancels_pending_lyrics(hass, client, server):
             await coordinator.async_stop()
 
 
+@pytest.mark.parametrize("cover", ["https://coverartarchive.org/release/example/front", None])
+async def test_static_cover_is_nonblocking_and_cached(hass, client, server, cover):
+    server["entries"] = [entry(albumId="album-1"), entry(username="Bob", albumId="album-1")]
+    coordinator = NavidromeCoordinator(hass, Mock(), client)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def blocked_cover(album_id):
+        entered.set()
+        await release.wait()
+        return cover
+
+    with patch.object(client, "static_cover", new=AsyncMock(side_effect=blocked_cover)) as fetch:
+        try:
+            await coordinator.async_start()
+            async with asyncio.timeout(2):
+                await entered.wait()
+            assert coordinator.last_update_success
+            assert coordinator.data["user-a"].selected.title == "First"
+            coordinator.invalidate()
+            await coordinator._refresh_task
+            fetch.assert_awaited_once_with("album-1")
+            pending = coordinator._static_cover_tasks["album-1"]
+            release.set()
+            await pending
+            assert coordinator.static_cover_for("album-1") == cover
+            server["entries"] = [entry(id="track-2", albumId="album-1")]
+            coordinator.invalidate()
+            await coordinator._refresh_task
+            fetch.assert_awaited_once()
+            coordinator._static_covers["album-1"] = (0, cover)
+            coordinator.invalidate()
+            await coordinator._refresh_task
+            await asyncio.gather(*coordinator._static_cover_tasks.values())
+            assert fetch.await_count == 2
+        finally:
+            release.set()
+            await coordinator.async_stop()
+
+
+async def test_static_cover_failure_does_not_fail_playback(hass, client, server):
+    server["entries"] = [entry(albumId="album-1")]
+    config_entry = Mock()
+    coordinator = NavidromeCoordinator(hass, config_entry, client)
+    failure = CannotConnect("Cover Art Archive returned HTTP 503")
+    with patch.object(client, "static_cover", new=AsyncMock(side_effect=failure)) as fetch:
+        try:
+            await coordinator.async_start()
+            await asyncio.gather(*coordinator._static_cover_tasks.values())
+            assert coordinator.last_update_success
+            assert coordinator.static_cover_for("album-1") is None
+            config_entry.async_start_reauth.assert_not_called()
+            coordinator.invalidate()
+            await coordinator._refresh_task
+            fetch.assert_awaited_once()
+        finally:
+            await coordinator.async_stop()
+
+
+async def test_unload_cancels_pending_static_cover(hass, client, server):
+    server["entries"] = [entry(albumId="album-1")]
+    coordinator = NavidromeCoordinator(hass, Mock(), client)
+    entered = asyncio.Event()
+
+    async def blocked_cover(album_id):
+        entered.set()
+        await asyncio.Event().wait()
+
+    with patch.object(client, "static_cover", new=AsyncMock(side_effect=blocked_cover)):
+        try:
+            await coordinator.async_start()
+            async with asyncio.timeout(2):
+                await entered.wait()
+            async with asyncio.timeout(2):
+                await coordinator.async_stop()
+            assert not coordinator._tasks
+            assert not coordinator._static_cover_tasks
+        finally:
+            await coordinator.async_stop()
+
+
 async def test_same_count_burst_has_immediate_trailing_refresh(hass, client, server):
     coordinator = NavidromeCoordinator(hass, Mock(), client)
     await coordinator.async_start()

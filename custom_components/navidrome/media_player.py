@@ -157,6 +157,7 @@ class NavidromePlayer(CoordinatorEntity[NavidromeCoordinator], MediaPlayerEntity
             "source_client": self._media("client"),
             "active_session_count": playback.session_count,
             "playback_rate": self._media("rate"),
+            "cover_art_static": self.coordinator.static_cover_for(self._media("album_id")),
             "lyrics_status": lyrics_status,
             "lyrics": dict(lyrics, song_id=song_id) if lyrics else None,
             "last_observed_change": playback.changed_at.isoformat()

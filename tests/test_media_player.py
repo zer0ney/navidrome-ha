@@ -89,6 +89,64 @@ async def test_artwork_without_cover_id(coordinator, hass, server, cover_art):
     assert server["requests"][-1][1]["id"] == "mf-track-1"
 
 
+async def test_static_cover_attribute_preserves_player_artwork(
+    coordinator, hass, server, cover_archive
+):
+    release_id = "76df3287-6cda-33eb-8e9a-044b5e15ffdd"
+    server["album"] = {"id": "album-1", "musicBrainzId": release_id}
+    publish(coordinator, [entry(albumId="album-1")])
+    player = NavidromePlayer(coordinator, "stable", "user-a")
+    player.hass = hass
+    player.entity_id = "media_player.navidrome_alice"
+    original_artwork = player.entity_picture
+    assert player.extra_state_attributes["cover_art_static"] is None
+    try:
+        coordinator._schedule_static_covers()
+        await coordinator._static_cover_tasks["album-1"]
+        assert player.extra_state_attributes["cover_art_static"] == (
+            f"{cover_archive['url']}/release/{release_id}/front"
+        )
+        assert player.entity_picture == original_artwork
+        assert await player.async_get_media_image() == (b"image-bytes", "image/png")
+        assert server["requests"][-1][0] == "/music/rest/getCoverArt"
+        publish(coordinator, [entry(id="track-2", albumId="album-2")])
+        assert player.extra_state_attributes["cover_art_static"] is None
+        publish(coordinator, [])
+        assert player.extra_state_attributes["cover_art_static"] is None
+    finally:
+        await coordinator.async_stop()
+
+
+async def test_late_static_cover_does_not_replace_current_album(coordinator):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def resolve(album_id):
+        if album_id == "album-1":
+            entered.set()
+            await release.wait()
+        return f"https://example.com/{album_id}.jpg"
+
+    player = NavidromePlayer(coordinator, "stable", "user-a")
+    with patch.object(coordinator.api, "static_cover", new=AsyncMock(side_effect=resolve)):
+        try:
+            publish(coordinator, [entry(albumId="album-1")])
+            coordinator._schedule_static_covers()
+            original = coordinator._static_cover_tasks["album-1"]
+            async with asyncio.timeout(2):
+                await entered.wait()
+            publish(coordinator, [entry(id="track-2", albumId="album-2")])
+            coordinator._schedule_static_covers()
+            await coordinator._static_cover_tasks["album-2"]
+            release.set()
+            await original
+            assert player.extra_state_attributes["cover_art_static"] == (
+                "https://example.com/album-2.jpg"
+            )
+        finally:
+            release.set()
+            await coordinator.async_stop()
+
+
 async def test_late_lyrics_do_not_replace_current_track(coordinator):
     entered, release = asyncio.Event(), asyncio.Event()
 

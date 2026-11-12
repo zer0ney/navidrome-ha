@@ -42,6 +42,7 @@ class Session:
     duration: float | None = None
     position: float | None = None
     rate: float | None = None
+    album_id: str | None = None
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Session:
@@ -60,6 +61,7 @@ class Session:
             artist=text(data.get("artist")),
             album=text(data.get("album")),
             album_artist=text(data.get("albumArtist")),
+            album_id=text(data.get("albumId")),
             cover_id=text(data.get("coverArt")) or f"mf-{track_id}",
             duration=number(data.get("duration")),
             position=None if position_ms is None else position_ms / 1000,

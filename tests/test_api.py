@@ -6,6 +6,7 @@ import pytest
 from httpx_sse._models import ServerSentEvent
 
 from custom_components.navidrome.api import (
+    CannotConnect,
     InvalidAuth,
     NotAdmin,
     NotSupported,
@@ -152,6 +153,66 @@ async def test_lyrics_attribute_size_is_bounded(client, server, monkeypatch):
     server["lyrics"] = [{"synced": False, "line": [{"value": "x" * 200}]}]
     with pytest.raises(ProtocolError, match="attribute size limit"):
         await client.lyrics("track-1")
+
+
+async def test_static_cover_uses_release_not_recording_id(client, server, cover_archive):
+    release_id = "76df3287-6cda-33eb-8e9a-044b5e15ffdd"
+    server["entries"] = [
+        entry(albumId="album-1", musicBrainzId="99b09d02-9cc9-3fed-8431-f162165a9371")
+    ]
+    server["album"] = {"id": "album-1", "musicBrainzId": release_id}
+    snapshot = await client.now_playing()
+    assert snapshot[0].album_id == "album-1"
+    assert await client.static_cover(snapshot[0].album_id) == (
+        f"{cover_archive['url']}/release/{release_id}/front"
+    )
+    path, query, _ = server["requests"][-1]
+    assert path == "/music/rest/getAlbum"
+    assert query["id"] == "album-1"
+    assert cover_archive["requests"] == [("HEAD", f"/release/{release_id}/front", {})]
+
+
+@pytest.mark.parametrize("release_id", [None, "", "not-a-uuid", "../../private", 123])
+async def test_static_cover_without_valid_release_id(client, server, cover_archive, release_id):
+    server["album"] = {"id": "album-1", "musicBrainzId": release_id}
+    assert await client.static_cover("album-1") is None
+    assert not cover_archive["requests"]
+
+
+async def test_static_cover_not_found(client, server, cover_archive):
+    server["album"] = {"musicBrainzId": "76df3287-6cda-33eb-8e9a-044b5e15ffdd"}
+    cover_archive["status"] = 404
+    assert await client.static_cover("album-1") is None
+
+
+@pytest.mark.parametrize("status", [403, 429, 503])
+async def test_static_cover_service_errors_are_not_navidrome_auth(
+    client, server, cover_archive, status
+):
+    server["album"] = {"musicBrainzId": "76df3287-6cda-33eb-8e9a-044b5e15ffdd"}
+    cover_archive["status"] = status
+    with pytest.raises(CannotConnect, match=f"Cover Art Archive returned HTTP {status}"):
+        await client.static_cover("album-1")
+
+
+async def test_static_cover_accepts_image_response(client, server, cover_archive):
+    release_id = "76df3287-6cda-33eb-8e9a-044b5e15ffdd"
+    server["album"] = {"musicBrainzId": release_id}
+    cover_archive["status"] = 200
+    assert await client.static_cover("album-1") == (
+        f"{cover_archive['url']}/release/{release_id}/front"
+    )
+
+
+@pytest.mark.parametrize(("code", "error"), [(40, InvalidAuth), (41, InvalidAuth), (70, None)])
+async def test_static_cover_album_lookup_errors(client, server, cover_archive, code, error):
+    server["rest_error"] = code
+    if error is None:
+        assert await client.static_cover("album-1") is None
+    else:
+        with pytest.raises(error):
+            await client.static_cover("album-1")
+    assert not cover_archive["requests"]
 
 
 async def test_artwork_cache(client, server):
